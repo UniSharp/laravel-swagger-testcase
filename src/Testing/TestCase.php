@@ -4,10 +4,15 @@ namespace Unisharp\SwaggerTestCase\Testing;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\File;
 
-class TestCase extends Laravel\Lumen\Testing\TestCase
+class TestCase extends \Laravel\Lumen\Testing\TestCase
 {
     protected $swagger = [];
     protected $doc_path = 'doc/swagger.json';
+
+    public function createApplication()
+    {
+        return require base_path('/bootstrap/app.php');
+    }
 
     public function setUp()
     {
