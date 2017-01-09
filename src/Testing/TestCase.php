@@ -3,6 +3,9 @@ namespace Unisharp\SwaggerTestCase\Testing;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\File;
+use Unisharp\SwaggerTestCase\Routes\DataGenerater;
+use Unisharp\SwaggerTestCase\Routes\Dispatcher;
+use Unisharp\SwaggerTestCase\Routes\Parser;
 
 class TestCase extends \Laravel\Lumen\Testing\TestCase
 {
@@ -24,8 +27,6 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
     }
     public function call($method, $uri, $parameters = [], $cookies = [], $files = [], $server = [], $content = null)
     {
-        parent::call($method, $uri, $parameters = [], $cookies = [], $files = [], $server = [], $content = null);
-
         $request = Request::create(
             $this->prepareUrlForRequest($uri),
             $method,
@@ -35,11 +36,42 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
             $server,
             $content
         );
+        parent::call($method, $uri, $parameters = [], $cookies = [], $files = [], $server = [], $content = null);
         $this->parseSwagger($request);
+    }
+
+    public function simpleDispatcher($routeDefinitionCallback, $options = [])
+    {
+        $options += [
+            'routeParser' => Parser::class,
+            'dataGenerator' => DataGenerater::class,
+            'dispatcher' => Dispatcher::class,
+            'routeCollector' => 'FastRoute\\RouteCollector',
+        ];
+
+        /** @var RouteCollector $routeCollector */
+        $routeCollector = new $options['routeCollector'](
+            new $options['routeParser'], new $options['dataGenerator']
+        );
+        $routeDefinitionCallback($routeCollector);
+
+        return new $options['dispatcher']($routeCollector->getData());
+    }
+
+    public function getRouterDispatcher()
+    {
+        $app = $this->app;
+        return $this->simpleDispatcher(function ($r) use ($app) {
+            foreach ($app->getRoutes() as $route) {
+                $r->addRoute($route['method'], $route['uri'], $route['action']);
+            }
+        });
     }
 
     public function parseSwagger(Request $request)
     {
+
+        $result = $this->getRouterDispatcher()->dispatch($request->getMethod(), $request->getPathInfo());
         $pathItemObject = [
             strtolower($request->getMethod()) => [
                 'parameters' => $this->parseParameters($request)
@@ -47,7 +79,7 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
         ];
 
         $pathObject = [
-            $request->getPathInfo() => $pathItemObject
+            $result[3] => $pathItemObject
         ];
 
         if (!isset($this->swagger['paths'])) {
@@ -87,6 +119,7 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
                 }
             });
         }
+
         if (!empty($request->getContent())) {
             $parameterObject = [
                 'description' => '',
