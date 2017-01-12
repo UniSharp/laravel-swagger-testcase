@@ -91,22 +91,30 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
         return $this->swagger;
     }
 
+    public function getPathParameters(Request $request)
+    {
+        $result = $this->getRouterDispatcher()->dispatch($request->getMethod(), $request->getPathInfo());
+        return isset($result[2]) ? collect($result[2]) : collect() ;
+    }
+
     public function parseParameters(Request $request)
     {
-        $parameterObject = [];
-        collect($request->query())->map(function ($value, $key) use (&$parameterObject) {
-            $parameterObject[] = [
+        $parameterObjects = [];
+        collect($request->query())->map(function ($value, $key) use (&$parameterObjects) {
+            $parameterObject = [
                 'name'        => $key,
                 'description' => '',
                 'in'          => 'query',
                 'required'    => true,
             ];
+
             $parameterObject += $this->getParameterType($value);
+            $parameterObjects[] = $parameterObject;
         });
 
         if ($request->getRequestFormat() == 'form') {
-            collect($request->all())->map(function ($value, $key) use ($request, &$parameterObject) {
-                $parameterObject[] = [
+            collect($request->all())->map(function ($value, $key) use ($request, &$parameterObjects) {
+                $parameterObject = [
                     'name' => $key,
                     'description' => '',
                     'in' => 'formData',
@@ -117,18 +125,32 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
                 } elseif (str_contains($request->getContentType(), ['/form'])) {
                     $parameterObject += $this->getParameterType($value);
                 }
+
+                $parameterObjects[] = $parameterObject;
             });
         }
 
-        if (!empty($request->getContent())) {
+        $this->getPathParameters($request)->each(function ($value, $key) use ($request, &$parameterObjects) {
             $parameterObject = [
+                'name' => $key,
+                'description' => '',
+                'in'          => 'path',
+                'required'    => true,
+            ];
+
+            $parameterObject += $this->getParameterType($value);
+            $parameterObjects[] = $parameterObject;
+        });
+
+        if (!empty($request->getContent())) {
+            $parameterObjects[] = [
                 'description' => '',
                 'in'          => 'body',
                 'required'    => true,
                 'schema'      => $this->parseSchemaObject(json_decode($request->getContent()))
             ];
         }
-        return $parameterObject;
+        return $parameterObjects;
     }
 
     public function parseSchemaObject($content)
