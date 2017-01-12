@@ -11,6 +11,9 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
 {
     protected $swagger = [];
     protected $doc_path = 'doc/swagger.json';
+    protected $request = null;
+    protected $expectedResponseCode = 200;
+    protected $expectedResponse = [];
 
     public function createApplication()
     {
@@ -25,6 +28,7 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
         }
 
     }
+
     public function call($method, $uri, $parameters = [], $cookies = [], $files = [], $server = [], $content = null)
     {
         $request = Request::create(
@@ -36,11 +40,49 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
             $server,
             $content
         );
-        parent::call($method, $uri, $parameters = [], $cookies = [], $files = [], $server = [], $content = null);
+
+        $this->request = $request;
+        parent::call($method, $uri, $parameters, $cookies, $files, $server, $content);
         $this->parseSwagger($request);
     }
 
-    public function simpleDispatcher($routeDefinitionCallback, $options = [])
+    public function assertResponseOk()
+    {
+        $this->expectedResponseCode = 200;
+        parent::assertResponseOk();
+    }
+
+    public function assertResponseStatus($code)
+    {
+        $this->expectedResponseCode = $code;
+    }
+
+    public function seeJsonEquals(array $data)
+    {
+        parent::seeJsonEquals($data);
+        if (empty($this->expectedResponse)) {
+            $this->expectedResponse = $data;
+        } else {
+            array_merge_recursive($this->expectedResponse, $data);
+        }
+    }
+
+    public function tearDown()
+    {
+        $this->parseResponseObjects();
+        parent::tearDown();
+
+        if (!File::exists(pathinfo($this->doc_path, PATHINFO_DIRNAME))) {
+            File::makeDirectory(pathinfo($this->doc_path, PATHINFO_DIRNAME));
+        }
+
+        File::put(
+            base_path($this->doc_path),
+            json_encode($this->swagger, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE|JSON_PRETTY_PRINT)
+        );
+    }
+
+    protected function simpleDispatcher($routeDefinitionCallback, $options = [])
     {
         $options += [
             'routeParser' => Parser::class,
@@ -58,7 +100,7 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
         return new $options['dispatcher']($routeCollector->getData());
     }
 
-    public function getRouterDispatcher()
+    protected function getRouterDispatcher()
     {
         $app = $this->app;
         return $this->simpleDispatcher(function ($r) use ($app) {
@@ -68,18 +110,17 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
         });
     }
 
-    public function parseSwagger(Request $request)
+    protected function parseSwagger(Request $request)
     {
 
-        $result = $this->getRouterDispatcher()->dispatch($request->getMethod(), $request->getPathInfo());
         $pathItemObject = [
             strtolower($request->getMethod()) => [
-                'parameters' => $this->parseParameters($request)
+                'parameters' => $this->parseParameterObjects($request)
             ]
         ];
 
         $pathObject = [
-            $result[3] => $pathItemObject
+            $this->getOriginalRoutePath($request) => $pathItemObject
         ];
 
         if (!isset($this->swagger['paths'])) {
@@ -91,13 +132,19 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
         return $this->swagger;
     }
 
-    public function getPathParameters(Request $request)
+    protected function getOriginalRoutePath(Request $request)
+    {
+        $result = $this->getRouterDispatcher()->dispatch($request->getMethod(), $request->getPathInfo());
+        return isset($result[3]) ? $result[3] : $request->getPathInfo();
+    }
+
+    protected function getPathParameters(Request $request)
     {
         $result = $this->getRouterDispatcher()->dispatch($request->getMethod(), $request->getPathInfo());
         return isset($result[2]) ? collect($result[2]) : collect() ;
     }
 
-    public function parseParameters(Request $request)
+    protected function parseParameterObjects(Request $request)
     {
         $parameterObjects = [];
         collect($request->query())->map(function ($value, $key) use (&$parameterObjects) {
@@ -150,26 +197,43 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
                 'schema'      => $this->parseSchemaObject(json_decode($request->getContent()))
             ];
         }
+
         return $parameterObjects;
     }
 
-    public function parseSchemaObject($content)
+    protected function parseSchemaObject($content)
     {
         $schema = [];
         $schema += $this->getParameterType($content);
         if (is_object($content)) {
             collect((array) $content)->map(function ($value, $key) use (&$schema) {
-                if (!isset($schema['property'])) {
+                if (!isset($schema['properties'])) {
                     $schema['properties'] = [];
                 }
 
-                $schema[$key] = $this->parseSchemaObject(json_decode(json_encode($value)));
+                $schema['properties'][$key] = $this->parseSchemaObject(json_decode(json_encode($value)));
             });
         }
+
         return $schema;
     }
 
-    public function getParameterType($value)
+    protected function parseResponseObjects()
+    {
+        $responseSchema = $this->parseSchemaObject(json_decode(json_encode($this->expectedResponse)));
+        if (!isset($this->swagger['paths'][$this->getOriginalRoutePath($this->request)]['responses'])) {
+            $this->swagger['paths'][$this->getOriginalRoutePath($this->request)]['responses'] = [];
+        }
+
+        $this->swagger['paths'][$this->getOriginalRoutePath($this->request)]['responses'][$this->expectedResponseCode]['schema']
+            = $responseSchema;
+
+
+        $this->swagger['paths'][$this->getOriginalRoutePath($this->request)]['responses'][$this->expectedResponseCode]['examples']
+            = $this->expectedResponse;
+    }
+
+    protected function getParameterType($value)
     {
         $data_type = [
             'type'   => '',
@@ -222,19 +286,4 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
 
         return $data_type;
     }
-
-    public function tearDown()
-    {
-        parent::tearDown();
-
-        if (!File::exists(pathinfo($this->doc_path, PATHINFO_DIRNAME))) {
-            File::makeDirectory(pathinfo($this->doc_path, PATHINFO_DIRNAME));
-        }
-
-        File::put(
-            base_path($this->doc_path),
-            json_encode($this->swagger, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE|JSON_PRETTY_PRINT)
-        );
-    }
-
 }
