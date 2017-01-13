@@ -198,7 +198,7 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
             'query'     => collect($request->query()),
             'path'      => collect($this->getPathParameters($request)),
             'body'      => $request->getContent(),
-            'formDat$a' => str_contains($request->getContentType(), ['/form']) ? collect($request->all()) : collect()
+            'formData' => str_contains($request->getContentType(), ['/form']) ? collect($request->all()) : collect()
         ];
 
         collect($parameters)->map(function ($parameters, $in) use ($request, &$parameterObjects) {
