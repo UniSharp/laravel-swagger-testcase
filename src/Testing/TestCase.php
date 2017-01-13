@@ -14,6 +14,7 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
     protected $request = null;
     protected $expectedResponseCode = 200;
     protected $expectedResponse = [];
+    protected $parameterDescriptions = [];
 
     public function createApplication()
     {
@@ -43,7 +44,6 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
 
         $this->request = $request;
         parent::call($method, $uri, $parameters, $cookies, $files, $server, $content);
-        $this->parseSwagger($request);
     }
 
     public function assertResponseOk()
@@ -67,9 +67,35 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
         }
     }
 
+    public function describeParameter($key, $description, $in = 'body')
+    {
+        $this->parameterDescriptions[] = [
+            'key'         => $key,
+            'description' => $description,
+            'in'          => $in
+        ];
+
+        return $this;
+    }
+
+    public function describePathParameter($key, $description)
+    {
+        return $this->describeParameter($key, $description, 'path');
+    }
+
+    public function describeFormParameter($key, $description)
+    {
+        return $this->describeParameter($key, $description, 'formData');
+    }
+
+    public function describeQueryParameter($key, $description)
+    {
+        return $this->describeParameter($key, $description, 'query');
+    }
+
     public function tearDown()
     {
-        $this->parseResponseObjects();
+        $this->parseSwagger($this->request);
         parent::tearDown();
 
         if (!File::exists(pathinfo($this->doc_path, PATHINFO_DIRNAME))) {
@@ -91,7 +117,6 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
             'routeCollector' => 'FastRoute\\RouteCollector',
         ];
 
-        /** @var RouteCollector $routeCollector */
         $routeCollector = new $options['routeCollector'](
             new $options['routeParser'], new $options['dataGenerator']
         );
@@ -113,11 +138,21 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
     protected function parseSwagger(Request $request)
     {
 
+        $method = strtolower($request->getMethod());
         $pathItemObject = [
-            strtolower($request->getMethod()) => [
-                'parameters' => $this->parseParameterObjects($request)
+            $method => [
+                'parameters' => $this->parseParameterObjects($request),
             ]
         ];
+
+        if (!isset($pathItemObject[$method]['responses'])) {
+            $pathItemObject[$method]['responses'] = [];
+        }
+
+        $pathItemObject[$method]['responses'] = array_merge_recursive(
+            $pathItemObject[$method]['responses'],
+            $this->parseResponseObjects($this->expectedResponse)
+        );
 
         $pathObject = [
             $this->getOriginalRoutePath($request) => $pathItemObject
@@ -127,7 +162,8 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
             $this->swagger['paths'] = [];
         }
 
-        $this->swagger['paths'] += $pathObject;
+
+        $this->swagger['paths'] = array_merge_recursive($this->swagger['paths'], $pathObject);
 
         return $this->swagger;
     }
@@ -144,59 +180,53 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
         return isset($result[2]) ? collect($result[2]) : collect() ;
     }
 
+    protected function getParameterDescription($key, $in)
+    {
+        foreach ($this->parameterDescriptions as $description) {
+            if ($description['key'] == $key && $description['in'] == $in) {
+                return $description['description'];
+            }
+        }
+
+        return '';
+    }
+
     protected function parseParameterObjects(Request $request)
     {
         $parameterObjects = [];
-        collect($request->query())->map(function ($value, $key) use (&$parameterObjects) {
-            $parameterObject = [
-                'name'        => $key,
-                'description' => '',
-                'in'          => 'query',
-                'required'    => true,
-            ];
+        $parameters = [
+            'query'     => collect($request->query()),
+            'path'      => collect($this->getPathParameters($request)),
+            'body'      => $request->getContent(),
+            'formDat$a' => str_contains($request->getContentType(), ['/form']) ? collect($request->all()) : collect()
+        ];
 
-            $parameterObject += $this->getParameterType($value);
-            $parameterObjects[] = $parameterObject;
-        });
-
-        if ($request->getRequestFormat() == 'form') {
-            collect($request->all())->map(function ($value, $key) use ($request, &$parameterObjects) {
+        collect($parameters)->map(function ($parameters, $in) use ($request, &$parameterObjects) {
+            if ($in == 'body') {
                 $parameterObject = [
-                    'name' => $key,
                     'description' => '',
-                    'in' => 'formData',
-                    'required' => true,
+                    'in'          => $in,
+                    'required'    => true,
+                    'schema'      => $this->parseSchemaObject($parameters)
                 ];
-                if ($request->isJson()) {
-                    $parameterObject['schema'] = $this->getParameterType($value);
-                } elseif (str_contains($request->getContentType(), ['/form'])) {
-                    $parameterObject += $this->getParameterType($value);
-                }
 
                 $parameterObjects[] = $parameterObject;
+                return;
+            }
+
+            $parameters->map(function ($parameter, $name) use ($request, $in, &$parameterObjects) {
+                $parameterObject = [
+                    'name'        => $name,
+                    'description' => $this->getParameterDescription($name, $in),
+                    'in'          => $in,
+                    'required'    => true,
+                ];
+
+
+                $parameterObject += $this->getParameterType($parameter);
+                $parameterObjects[] = $parameterObject;
             });
-        }
-
-        $this->getPathParameters($request)->each(function ($value, $key) use ($request, &$parameterObjects) {
-            $parameterObject = [
-                'name' => $key,
-                'description' => '',
-                'in'          => 'path',
-                'required'    => true,
-            ];
-
-            $parameterObject += $this->getParameterType($value);
-            $parameterObjects[] = $parameterObject;
         });
-
-        if (!empty($request->getContent())) {
-            $parameterObjects[] = [
-                'description' => '',
-                'in'          => 'body',
-                'required'    => true,
-                'schema'      => $this->parseSchemaObject(json_decode($request->getContent()))
-            ];
-        }
 
         return $parameterObjects;
     }
@@ -218,19 +248,19 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
         return $schema;
     }
 
-    protected function parseResponseObjects()
+    protected function parseResponseObjects($response)
     {
-        $responseSchema = $this->parseSchemaObject(json_decode(json_encode($this->expectedResponse)));
-        if (!isset($this->swagger['paths'][$this->getOriginalRoutePath($this->request)]['responses'])) {
-            $this->swagger['paths'][$this->getOriginalRoutePath($this->request)]['responses'] = [];
-        }
+        return [$this->expectedResponseCode => $this->parseResponseObject($response)];
+    }
 
-        $this->swagger['paths'][$this->getOriginalRoutePath($this->request)]['responses'][$this->expectedResponseCode]['schema']
-            = $responseSchema;
-
-
-        $this->swagger['paths'][$this->getOriginalRoutePath($this->request)]['responses'][$this->expectedResponseCode]['examples']
-            = $this->expectedResponse;
+    protected function parseResponseObject($response)
+    {
+        return [
+            'schema' => $this->parseSchemaObject(json_decode(json_encode($response))),
+            'examples' => [
+                'application/json' => $response
+            ]
+        ];
     }
 
     protected function getParameterType($value)
