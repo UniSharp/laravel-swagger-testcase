@@ -15,6 +15,7 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
     protected $expectedResponseCode = 200;
     protected $expectedResponse = [];
     protected $parameterDescriptions = [];
+    protected $responseDescription = '';
 
     public function createApplication()
     {
@@ -93,6 +94,11 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
         return $this->describeParameter($key, $description, 'query');
     }
 
+    public function describeResponse($description)
+    {
+        $this->responseDescription = $description;
+    }
+
     public function tearDown()
     {
         $this->parseSwagger($this->request);
@@ -149,10 +155,7 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
             $pathItemObject[$method]['responses'] = [];
         }
 
-        $pathItemObject[$method]['responses'] = array_merge_recursive(
-            $pathItemObject[$method]['responses'],
-            $this->parseResponseObjects($this->expectedResponse)
-        );
+        $pathItemObject[$method]['responses'] += $this->parseResponseObjects($this->expectedResponse);
 
         $pathObject = [
             $this->getOriginalRoutePath($request) => $pathItemObject
@@ -163,15 +166,26 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
         }
 
 
-        $this->swagger['paths'] = array_merge_recursive($this->swagger['paths'], $pathObject);
+        $this->swagger['swagger']  = config('swagger.swagger', '2.0');
+        $this->swagger['basePath'] = config('swagger.basePath', '/api/v1');
+        $this->swagger['host']     = config('swagger.host', 'localhost');
+        $this->swagger['info']     = config('swagger.info', [
+            'title'       => 'Title',
+            'description' => 'Description',
+            'version'     => '0.1'
+        ]);
+        $this->swagger['paths']    = array_merge_recursive($this->swagger['paths'], $pathObject);
 
         return $this->swagger;
     }
 
     protected function getOriginalRoutePath(Request $request)
     {
+        // /api/v1/entity/{variable:regex} -> /entity/{variable}
         $result = $this->getRouterDispatcher()->dispatch($request->getMethod(), $request->getPathInfo());
-        return isset($result[3]) ? $result[3] : $request->getPathInfo();
+        return isset($result[3]) ?
+            str_replace(config('swagger.basePath', '/api/v1'), '', preg_replace("/({.+?)(:.+?)(})/", "$1$3", $result[3])) :
+            $request->getPathInfo();
     }
 
     protected function getPathParameters(Request $request)
@@ -204,6 +218,7 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
         collect($parameters)->map(function ($parameters, $in) use ($request, &$parameterObjects) {
             if ($in == 'body') {
                 $parameterObject = [
+                    'name'      => 'body',
                     'description' => '',
                     'in'          => $in,
                     'required'    => true,
@@ -256,8 +271,9 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
     protected function parseResponseObject($response)
     {
         return [
-            'schema' => $this->parseSchemaObject(json_decode(json_encode($response))),
-            'examples' => [
+            'description' => $this->responseDescription,
+            'schema'      => $this->parseSchemaObject(json_decode(json_encode($response))),
+            'examples'    => [
                 'application/json' => $response
             ]
         ];
