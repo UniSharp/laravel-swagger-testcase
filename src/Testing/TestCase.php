@@ -44,7 +44,7 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
         );
 
         $this->request = $request;
-        parent::call($method, $uri, $parameters, $cookies, $files, $server, $content);
+        return parent::call($method, $uri, $parameters, $cookies, $files, $server, $content);
     }
 
     public function assertResponseOk()
@@ -66,6 +66,8 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
         } else {
             array_merge_recursive($this->expectedResponse, $data);
         }
+
+        return $this;
     }
 
     public function describeParameter($key, $description, $in = 'body')
@@ -97,6 +99,7 @@ class TestCase extends \Laravel\Lumen\Testing\TestCase
     public function describeResponse($description)
     {
         $this->responseDescription = $description;
+        return $this;
     }
 
     public function tearDown()
